@@ -5,43 +5,53 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from supabase_client import supabase
 import os
+import threading
+from flask import Flask
 
+# ==========================
+# CONFIG
+# ==========================
 BACKEND_URL = "https://email-tracking-0au6.onrender.com"
-
 FROM_EMAIL = "astelpauly2002@gmail.com"
 APP_PASSWORD = "ewpfefvucsamzqvp"
 
 EMAILS_PER_DAY = 20
 INTERVAL_MINUTES = 1
-
 START_HOUR = 9
 END_HOUR = 19   # 7 PM
 
+# ==========================
+# FLASK SERVER TO KEEP REPLIT ALIVE
+# ==========================
+app = Flask(__name__)
 
+@app.route("/")
+def home():
+    return "Scheduler is running!"
+
+def run_flask():
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
+
+# ==========================
+# SCHEDULER FUNCTIONS
+# ==========================
 def is_valid_time():
     now = datetime.now()
-
-    # Monday=0, Sunday=6
-    if now.weekday() > 4:
+    if now.weekday() > 4:  # Mon-Fri only
         return False
-
     if not (START_HOUR <= now.hour < END_HOUR):
         return False
-
     return True
-
 
 def get_today_sent_count():
     today = datetime.now().date()
-
     result = supabase.table("email_events") \
         .select("id") \
         .eq("flag_sent", True) \
         .gte("created_at", str(today)) \
         .execute()
-
     return len(result.data) if result.data else 0
-
 
 def get_next_unsent_event():
     result = supabase.table("email_events") \
@@ -50,26 +60,19 @@ def get_next_unsent_event():
         .eq("flag_sent", False) \
         .limit(1) \
         .execute()
-
-    if result.data:
-        return result.data[0]
-
-    return None
-
+    return result.data[0] if result.data else None
 
 def send_email(event):
     campaign_id = event["campaign_id"]
     lead_id = event["lead_id"]
     user_id = event["user_id"]
 
-    # 1️⃣ Get lead
     lead = supabase.table("leads") \
         .select("*") \
         .eq("id", lead_id) \
         .single() \
         .execute().data
 
-    # 2️⃣ Get email content
     email_content = supabase.table("email_contents") \
         .select("*") \
         .eq("campaign_id", campaign_id) \
@@ -82,41 +85,24 @@ def send_email(event):
     content = email_content["content"]
     redirect_url = email_content["redirect_url"]
 
-    # 3️⃣ Tracking URLs
     pixel_url = f"{BACKEND_URL}/track?u={user_id}&c={campaign_id}&l={lead_id}"
+    click_url = f"{BACKEND_URL}/click?u={user_id}&c={campaign_id}&l={lead_id}&redirect={redirect_url}"
 
-    click_url = (
-        f"{BACKEND_URL}/click"
-        f"?u={user_id}"
-        f"&c={campaign_id}"
-        f"&l={lead_id}"
-        f"&redirect={redirect_url}"
-    )
-
-    # 4️⃣ Email HTML
     html_content = f"""
     <html>
         <body>
             <p>Dear {name},</p>
             <p>{content}</p>
-
-            <p>
-                <a href="{click_url}">
-                    Click here for more details
-                </a>
-            </p>
-
+            <p><a href="{click_url}">Click here for more details</a></p>
             <img src="{pixel_url}" width="1" height="1" />
         </body>
     </html>
     """
 
-    # 5️⃣ Send email
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"] = FROM_EMAIL
     msg["To"] = to_email
-
     msg.attach(MIMEText(html_content, "html"))
 
     with smtplib.SMTP("smtp.gmail.com", 587) as server:
@@ -126,12 +112,10 @@ def send_email(event):
 
     print(f"Email sent to {to_email}")
 
-    # 6️⃣ Update flag_sent = true
     supabase.table("email_events") \
         .update({"flag_sent": True}) \
         .eq("id", event["id"]) \
         .execute()
-
 
 def run_scheduler():
     while True:
@@ -141,14 +125,12 @@ def run_scheduler():
                 continue
 
             sent_today = get_today_sent_count()
-
             if sent_today >= EMAILS_PER_DAY:
                 print("Daily limit reached")
                 time.sleep(600)
                 continue
 
             event = get_next_unsent_event()
-
             if event:
                 send_email(event)
             else:
@@ -160,6 +142,11 @@ def run_scheduler():
             print("Error:", e)
             time.sleep(60)
 
-
+# ==========================
+# MAIN
+# ==========================
 if __name__ == "__main__":
+    # Start Flask server in a separate thread
+    threading.Thread(target=run_flask).start()
+    # Start scheduler
     run_scheduler()
