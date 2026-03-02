@@ -50,7 +50,8 @@ def get_today_sent_count():
     result = supabase.table("email_events") \
         .select("id") \
         .eq("flag_sent", True) \
-        .gte("created_at", str(today)) \
+        .eq("event_type", "sent") \
+        .gte("modified_at", str(today)) \
         .execute()
     return len(result.data) if result.data else 0
 
