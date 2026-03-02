@@ -13,8 +13,8 @@ from flask import Flask
 # CONFIG
 # ==========================
 BACKEND_URL = "https://email-tracking-0au6.onrender.com"
-FROM_EMAIL = os.environ.get("FROM_EMAIL", "your-email@gmail.com")
-APP_PASSWORD = os.environ.get("APP_PASSWORD", "your-app-password")
+FROM_EMAIL = os.environ.get("FROM_EMAIL", "astelpauly2002@gmail.com")
+APP_PASSWORD = os.environ.get("APP_PASSWORD", "ewpfefvucsamzqvp")
 
 EMAILS_PER_DAY = 20
 INTERVAL_MINUTES = 1
@@ -55,46 +55,77 @@ def get_today_sent_count():
         .execute()
     return len(result.data) if result.data else 0
 
+# ==========================
+# GET NEXT UNSENT EVENT + EMAIL + LEAD INFO
+# ==========================
 def get_next_unsent_event():
-    result = supabase.table("email_events") \
+    # 1️⃣ Get next unsent email event
+    event_result = supabase.table("email_events") \
         .select("*") \
         .eq("event_type", "sent") \
         .eq("flag_sent", False) \
         .limit(1) \
         .execute()
-    return result.data[0] if result.data else None
 
-def send_email(event):
+    if not event_result.data:
+        return None  # No pending emails
+
+    event = event_result.data[0]
     campaign_id = event["campaign_id"]
     lead_id = event["lead_id"]
-    user_id = event["user_id"]
 
-    lead = supabase.table("leads") \
-        .select("*") \
-        .eq("id", lead_id) \
-        .single() \
-        .execute().data
-
-    email_content = supabase.table("email_contents") \
+    # 2️⃣ Get email content for the campaign
+    content_result = supabase.table("email_contents") \
         .select("*") \
         .eq("campaign_id", campaign_id) \
         .limit(1) \
-        .execute().data[0]
+        .execute()
 
-    name = lead["name"]
-    to_email = lead["email"]
-    subject = email_content["subject"]
-    content = email_content["content"]
-    redirect_url = email_content["redirect_url"]
+    if not content_result.data:
+        print(f"No email content found for campaign_id {campaign_id}")
+        return None
 
-    pixel_url = f"{BACKEND_URL}/track?u={user_id}&c={campaign_id}&l={lead_id}"
-    click_url = f"{BACKEND_URL}/click?u={user_id}&c={campaign_id}&l={lead_id}&redirect={redirect_url}"
+    email_content = content_result.data[0]
+
+    # 3️⃣ Get lead info
+    lead_result = supabase.table("leads") \
+        .select("*") \
+        .eq("id", lead_id) \
+        .eq("campaign_id", campaign_id) \
+        .limit(1) \
+        .execute()
+
+    if not lead_result.data:
+        print(f"No lead found with id {lead_id} for campaign_id {campaign_id}")
+        return None
+
+    lead = lead_result.data[0]
+
+    # 4️⃣ Combine all info
+    return {
+        "event_id": event["id"],
+        "campaign_id": campaign_id,
+        "lead_id": lead_id,
+        "user_id": lead["user_id"],
+        "lead_name": lead["name"],
+        "lead_email": lead["email"],
+        "subject": email_content["subject"],
+        "content": email_content["content"],
+        "redirect_url": email_content.get("redirect_url", ""),
+    }
+
+# ==========================
+# SEND EMAIL
+# ==========================
+def send_email(data):
+    pixel_url = f"{BACKEND_URL}/track?u={data['user_id']}&c={data['campaign_id']}&l={data['lead_id']}"
+    click_url = f"{BACKEND_URL}/click?u={data['user_id']}&c={data['campaign_id']}&l={data['lead_id']}&redirect={data['redirect_url']}"
 
     html_content = f"""
     <html>
         <body>
-            <p>Dear {name},</p>
-            <p>{content}</p>
+            <p>Dear {data['lead_name']},</p>
+            <p>{data['content']}</p>
             <p><a href="{click_url}">Click here for more details</a></p>
             <img src="{pixel_url}" width="1" height="1" />
         </body>
@@ -102,23 +133,27 @@ def send_email(event):
     """
 
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
+    msg["Subject"] = data["subject"]
     msg["From"] = FROM_EMAIL
-    msg["To"] = to_email
+    msg["To"] = data["lead_email"]
     msg.attach(MIMEText(html_content, "html"))
 
     with smtplib.SMTP("smtp.gmail.com", 587) as server:
         server.starttls()
         server.login(FROM_EMAIL, APP_PASSWORD)
-        server.sendmail(FROM_EMAIL, to_email, msg.as_string())
+        server.sendmail(FROM_EMAIL, data["lead_email"], msg.as_string())
 
-    print(f"Email sent to {to_email}")
+    print(f"Email sent to {data['lead_email']}")
 
+    # Update the event as sent
     supabase.table("email_events") \
         .update({"flag_sent": True}) \
-        .eq("id", event["id"]) \
+        .eq("id", data["event_id"]) \
         .execute()
 
+# ==========================
+# RUN SCHEDULER
+# ==========================
 def run_scheduler():
     while True:
         try:
@@ -132,9 +167,9 @@ def run_scheduler():
                 time.sleep(600)
                 continue
 
-            event = get_next_unsent_event()
-            if event:
-                send_email(event)
+            data = get_next_unsent_event()
+            if data:
+                send_email(data)
             else:
                 print("No pending emails")
 
@@ -150,5 +185,5 @@ def run_scheduler():
 if __name__ == "__main__":
     # Start Flask server in a separate thread (port required for Render)
     threading.Thread(target=run_flask).start()
-    # Start your email scheduler
+    # Start the email scheduler
     run_scheduler()
