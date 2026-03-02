@@ -1,3 +1,4 @@
+# main.py
 import smtplib
 import time
 from datetime import datetime
@@ -12,8 +13,8 @@ from flask import Flask
 # CONFIG
 # ==========================
 BACKEND_URL = "https://email-tracking-0au6.onrender.com"
-FROM_EMAIL = "astelpauly2002@gmail.com"
-APP_PASSWORD = "ewpfefvucsamzqvp"
+FROM_EMAIL = os.environ.get("FROM_EMAIL", "your-email@gmail.com")
+APP_PASSWORD = os.environ.get("APP_PASSWORD", "your-app-password")
 
 EMAILS_PER_DAY = 20
 INTERVAL_MINUTES = 1
@@ -21,16 +22,16 @@ START_HOUR = 9
 END_HOUR = 19   # 7 PM
 
 # ==========================
-# FLASK SERVER TO KEEP REPLIT ALIVE
+# FLASK SERVER TO KEEP RENDER HAPPY
 # ==========================
 app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Scheduler is running!"
+    return "Email Scheduler is running!"
 
 def run_flask():
-    port = int(os.environ.get("PORT", 8080))
+    port = int(os.environ.get("PORT", 10000))  # Render sets $PORT automatically
     app.run(host="0.0.0.0", port=port)
 
 # ==========================
@@ -146,7 +147,7 @@ def run_scheduler():
 # MAIN
 # ==========================
 if __name__ == "__main__":
-    # Start Flask server in a separate thread
+    # Start Flask server in a separate thread (port required for Render)
     threading.Thread(target=run_flask).start()
-    # Start scheduler
+    # Start your email scheduler
     run_scheduler()
